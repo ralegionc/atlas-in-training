@@ -1,0 +1,299 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Watching a Model Learn the World</title>
+<style>
+  :root {
+    --bg: #0a0d12; --panel: #10141a; --lace: #252c37; --text: #e8e4da;
+    --subtle: #8a8f98; --faint: #5a616c; --amber: #f6b73c; --accent: #a9cdee;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.45 "DejaVu Sans", "Segoe UI", system-ui, sans-serif; }
+  main { max-width: 1240px; margin: 0 auto; padding: 28px 16px 40px; }
+  h1 { font-size: clamp(26px, 4vw, 40px); margin: 0 0 4px; letter-spacing: -0.01em; }
+  .sub { color: var(--subtle); margin: 0 0 18px; max-width: 900px; }
+  .controls { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; margin-bottom: 10px; }
+  button, .seg label { background: var(--panel); color: var(--text); border: 1px solid var(--lace);
+    border-radius: 6px; padding: 6px 12px; font: inherit; cursor: pointer; }
+  button:hover, .seg label:hover { border-color: var(--faint); }
+  .seg { display: inline-flex; gap: 0; }
+  .seg input { display: none; }
+  .seg label { border-radius: 0; }
+  .seg label:first-of-type { border-radius: 6px 0 0 6px; }
+  .seg label:last-of-type { border-radius: 0 6px 6px 0; border-left: none; }
+  .seg input:checked + label { background: #2a2216; border-color: #8a5f1d; color: var(--amber); }
+  #slider { flex: 1 1 260px; accent-color: var(--amber); }
+  #stepinfo { color: var(--subtle); font-variant-numeric: tabular-nums; min-width: 300px; }
+  #stepinfo b { color: var(--text); font-weight: 600; }
+  .search { position: relative; }
+  .search input { background: var(--panel); color: var(--text); border: 1px solid var(--lace);
+    border-radius: 6px; padding: 6px 10px; font: inherit; width: 220px; }
+  #matches { position: absolute; top: 100%; left: 0; right: 0; z-index: 5; background: var(--panel);
+    border: 1px solid var(--lace); border-radius: 6px; margin-top: 4px; display: none; max-height: 260px; overflow: auto; }
+  #matches div { padding: 5px 10px; cursor: pointer; }
+  #matches div:hover, #matches div.on { background: #1b212a; }
+  #matches small { color: var(--subtle); }
+  .stage { position: relative; }
+  canvas { display: block; width: 100%; touch-action: none; }
+  #tip { position: absolute; pointer-events: none; background: rgba(16,20,26,.95); border: 1px solid var(--lace);
+    border-radius: 6px; padding: 7px 10px; font-size: 13px; display: none; max-width: 260px; }
+  #tip .n { font-weight: 600; }
+  #tip .m { color: var(--subtle); }
+  .legend { display: flex; align-items: center; gap: 10px; color: var(--subtle); font-size: 13px; margin-top: 8px; flex-wrap: wrap; }
+  .ramp { width: 180px; height: 9px; border-radius: 5px;
+    background: linear-gradient(90deg, #15191f, #3a2f1c, #8a5f1d, #d9952c, #f6b73c, #fff2cf); }
+  #card { margin-top: 14px; background: var(--panel); border: 1px solid var(--lace); border-radius: 8px;
+    padding: 12px 14px; display: none; }
+  #card h2 { font-size: 18px; margin: 0 0 2px; }
+  #card .m { color: var(--subtle); font-size: 13px; }
+  #spark { width: 100%; height: 70px; display: block; margin-top: 8px; }
+  .notes { color: var(--faint); font-size: 12.5px; margin-top: 18px; max-width: 900px; }
+  .notes a { color: var(--accent); }
+  @media (max-width: 640px) { #stepinfo { min-width: 0; width: 100%; } .search input { width: 100%; } .search { width: 100%; } }
+</style>
+</head>
+<body>
+<main>
+  <h1>Watching a Model Learn the World</h1>
+  <p class="sub">15,058 places, read by two Pythia models at points through their training. A linear probe
+    on the model's hidden states guesses where each place is. Drag the slider to watch the map form; search
+    a place to see where the model put it at every step.</p>
+
+  <div class="controls">
+    <button id="play" aria-label="play">&#9654; Play</button>
+    <input id="slider" type="range" min="0" max="0" step="0.001" value="0" aria-label="training step">
+    <span id="stepinfo"></span>
+  </div>
+  <div class="controls">
+    <span class="seg" role="radiogroup" aria-label="model" id="models"></span>
+    <span class="seg" role="radiogroup" aria-label="view">
+      <input type="radio" name="view" id="v-known" value="known" checked><label for="v-known">Where it knows</label>
+      <input type="radio" name="view" id="v-pred" value="pred"><label for="v-pred">Where it puts them</label>
+    </span>
+    <span class="search">
+      <input id="q" type="search" placeholder="Find a place (try Cusco)" autocomplete="off" aria-label="find a place">
+      <div id="matches"></div>
+    </span>
+  </div>
+
+  <div class="stage">
+    <canvas id="map"></canvas>
+    <div id="tip"></div>
+  </div>
+  <div class="legend" id="legend"></div>
+
+  <div id="card">
+    <h2 id="c-name"></h2>
+    <div class="m" id="c-meta"></div>
+    <canvas id="spark"></canvas>
+  </div>
+
+  <p class="notes">Brightness is how close the probe's out-of-fold guess lands: full at 100 km or less,
+    dark at 3,000 km or more. Probes are ridge regressions onto a point on the globe, so a place the model
+    knows little about is pulled to the middle of the cloud, which lies near Europe. Places from Gurnee &amp; Tegmark (2023),
+    names cut before any comma or bracket; Pile counts from <a href="https://infini-gram.io">infini-gram</a>;
+    coastlines from Natural Earth. Code and method: see the README.</p>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/topojson-client@3.1.0/dist/topojson-client.min.js"></script>
+<script src="data.js"></script>
+<script>
+(function () {
+  const A = window.ATLAS;
+  const N = A.names.length;
+  const dec = (s, Type) => { const b = atob(s), u = new Uint8Array(b.length);
+    for (let i = 0; i < b.length; i++) u[i] = b.charCodeAt(i); return new Type(u.buffer); };
+  const MODELS = {};
+  for (const k of A.order) { const m = A.models[k];
+    MODELS[k] = {steps: m.steps, median_km: m.median_km, PLAT: dec(m.plat, Int16Array), PLON: dec(m.plon, Int16Array),
+                 KNOW: dec(m.know, Uint8Array), ERR: dec(m.err, Uint16Array)}; }
+  let model = A.order[0], M = MODELS[model], T = M.steps.length;
+  let PLAT = M.PLAT, PLON = M.PLON, KNOW = M.KNOW, ERR = M.ERR;
+  const stops = ["#15191f", "#3a2f1c", "#8a5f1d", "#d9952c", "#f6b73c", "#fff2cf"];
+  const ramp = d3.scaleLinear().domain(stops.map((_, i) => i / (stops.length - 1))).range(stops)
+    .interpolate(d3.interpolateRgb).clamp(true);
+  const COL = Array.from({length: 256}, (_, k) => ramp(k / 255));
+
+  const canvas = document.getElementById("map"), ctx = canvas.getContext("2d");
+  const tip = document.getElementById("tip");
+  const slider = document.getElementById("slider"), info = document.getElementById("stepinfo");
+  slider.max = T - 1;
+  const mbox = document.getElementById("models");
+  mbox.innerHTML = A.order.map((k, i) => '<input type="radio" name="model" id="m-' + i + '" value="' + k + '"' +
+    (i === 0 ? " checked" : "") + '><label for="m-' + i + '">Pythia-' + k + "</label>").join("");
+  mbox.addEventListener("change", e => {
+    model = e.target.value; M = MODELS[model]; T = M.steps.length;
+    PLAT = M.PLAT; PLON = M.PLON; KNOW = M.KNOW; ERR = M.ERR;
+    slider.max = T - 1; t = T - 1; slider.value = t; project(); draw(); if (selected >= 0) card(selected);
+  });
+  let W = 0, H = 0, dpr = 1, proj, path, land = null;
+  let t = T - 1, view = "known", selected = -1, playing = false, last = 0;
+  let sx = new Float32Array(N), sy = new Float32Array(N), kk = new Uint8Array(N), tree = null;
+
+  // projected true positions are fixed; predicted ones are projected per checkpoint
+  let TX, TY, PX, PY;
+  function project() {
+    TX = new Float32Array(N); TY = new Float32Array(N);
+    for (let i = 0; i < N; i++) { const p = proj([A.lon[i], A.lat[i]]); TX[i] = p[0]; TY[i] = p[1]; }
+    PX = []; PY = [];
+    for (let s = 0; s < T; s++) {
+      const x = new Float32Array(N), y = new Float32Array(N);
+      for (let i = 0; i < N; i++) { const p = proj([PLON[s * N + i] / 100, PLAT[s * N + i] / 100]); x[i] = p[0]; y[i] = p[1]; }
+      PX.push(x); PY.push(y);
+    }
+  }
+
+  function resize() {
+    const w = canvas.parentElement.clientWidth;
+    dpr = window.devicePixelRatio || 1;
+    W = w; H = Math.round(w * 0.5);
+    canvas.width = W * dpr; canvas.height = H * dpr; canvas.style.height = H + "px";
+    proj = d3.geoEqualEarth().fitExtent([[6, 6], [W - 6, H - 6]], {type: "Sphere"});
+    path = d3.geoPath(proj, ctx);
+    project();
+    draw();
+  }
+
+  function frame() {
+    // interpolate between the two nearest checkpoints
+    const a = Math.floor(t), b = Math.min(a + 1, T - 1), f = t - a;
+    for (let i = 0; i < N; i++) {
+      const ka = KNOW[a * N + i], kb = KNOW[b * N + i];
+      kk[i] = Math.round(ka + (kb - ka) * f);
+      if (view === "known") { sx[i] = TX[i]; sy[i] = TY[i]; }
+      else { sx[i] = PX[a][i] + (PX[b][i] - PX[a][i]) * f; sy[i] = PY[a][i] + (PY[b][i] - PY[a][i]) * f; }
+    }
+  }
+
+  function draw() {
+    if (!proj) return;
+    frame();
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.fillStyle = "#0a0d12"; ctx.fillRect(0, 0, W, H);
+    ctx.beginPath(); path({type: "Sphere"}); ctx.strokeStyle = "#252c37"; ctx.lineWidth = 0.8; ctx.stroke();
+    if (land) { ctx.beginPath(); path(land); ctx.fillStyle = "#10141a"; ctx.fill();
+      ctx.strokeStyle = "#252c37"; ctx.lineWidth = 0.5; ctx.stroke(); }
+    const order = Array.from(kk.keys()).sort((i, j) => kk[i] - kk[j]);
+    const scale = Math.max(0.7, W / 1200);
+    ctx.globalAlpha = 0.07;
+    for (const i of order) { const r = (1.2 + 5 * kk[i] / 255) * scale; ctx.fillStyle = COL[kk[i]];
+      ctx.fillRect(sx[i] - r, sy[i] - r, 2 * r, 2 * r); }
+    ctx.globalAlpha = 0.92;
+    for (const i of order) { const r = (0.45 + 1.3 * kk[i] / 255) * scale; ctx.fillStyle = COL[kk[i]];
+      ctx.fillRect(sx[i] - r, sy[i] - r, 2 * r, 2 * r); }
+    ctx.globalAlpha = 1;
+    if (selected >= 0) drawPath(selected);
+    const a = Math.round(t), s = M.steps[a];
+    const tok = s * A.tokens_per_step;
+    const tokl = s === 0 ? "0 tokens" : tok >= 1e9 ? (tok / 1e9).toFixed(1) + "B tokens" : (tok / 1e6).toFixed(0) + "M tokens";
+    info.innerHTML = "<b>" + (s === 0 ? "initialisation" : "step " + s.toLocaleString()) + "</b> · " + tokl +
+      " · median error <b>" + Math.round(M.median_km[a]).toLocaleString() + " km</b>";
+    tree = null;
+  }
+
+  function drawPath(i) {
+    ctx.save();
+    ctx.strokeStyle = "#a9cdee"; ctx.lineWidth = 1.4; ctx.globalAlpha = 0.85;
+    ctx.beginPath();
+    for (let s = 0; s < T; s++) { const x = PX[s][i], y = PY[s][i]; s ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }
+    ctx.stroke();
+    for (let s = 0; s < T; s++) { ctx.beginPath(); ctx.arc(PX[s][i], PY[s][i], s === Math.round(t) ? 4.5 : 2.2, 0, 7);
+      ctx.fillStyle = s === Math.round(t) ? "#ffffff" : "#a9cdee"; ctx.fill(); }
+    ctx.beginPath(); ctx.arc(TX[i], TY[i], 7, 0, 7); ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 1.6; ctx.stroke();
+    ctx.font = "600 13px DejaVu Sans, system-ui"; ctx.fillStyle = "#ffffff";
+    ctx.fillText(A.names[i], TX[i] + 10, TY[i] - 8);
+    ctx.restore();
+  }
+
+  function setT(v) { t = Math.max(0, Math.min(T - 1, v)); slider.value = t; draw(); if (selected >= 0) card(selected); }
+  slider.addEventListener("input", () => { playing = false; playBtn(); setT(+slider.value); });
+  document.querySelectorAll('input[name="view"]').forEach(r => r.addEventListener("change", e => { view = e.target.value; legend(); draw(); }));
+
+  const play = document.getElementById("play");
+  function playBtn() { play.innerHTML = playing ? "&#10074;&#10074; Pause" : "&#9654; Play"; }
+  play.addEventListener("click", () => { playing = !playing; if (playing && t >= T - 1) t = 0; playBtn(); last = 0; requestAnimationFrame(tick); });
+  function tick(ts) {
+    if (!playing) return;
+    if (last) { setT(t + (ts - last) / 650); }
+    last = ts;
+    if (t >= T - 1) { playing = false; playBtn(); return; }
+    requestAnimationFrame(tick);
+  }
+
+  function legend() {
+    document.getElementById("legend").innerHTML = view === "known"
+      ? '<span>Each place at its true position.</span><span>3,000 km or more off</span><span class="ramp"></span><span>within 100 km</span>'
+      : '<span>Each place where the probe puts it, coloured by how close that is.</span><span>3,000 km or more off</span><span class="ramp"></span><span>within 100 km</span>';
+  }
+
+  // hover
+  canvas.addEventListener("mousemove", e => {
+    const r = canvas.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
+    if (!tree) tree = d3.quadtree().x(i => sx[i]).y(i => sy[i]).addAll(Array.from({length: N}, (_, i) => i));
+    const i = tree.find(x, y, 8);
+    if (i === undefined) { tip.style.display = "none"; return; }
+    const a = Math.round(t), km = ERR[a * N + i] * 10;
+    const c = A.count ? A.count[i] : -1;
+    tip.innerHTML = '<div class="n">' + A.names[i] + '</div><div class="m">' + A.country[i] + "</div>" +
+      (c >= 0 ? '<div class="m">' + c.toLocaleString() + " mentions in the Pile</div>" : "") +
+      '<div class="m">probe puts it ' + (km >= 20000 ? "20,000+" : km.toLocaleString()) + " km away</div>";
+    tip.style.display = "block";
+    tip.style.left = Math.min(x + 14, W - 200) + "px"; tip.style.top = (y + 14) + "px";
+  });
+  canvas.addEventListener("mouseleave", () => tip.style.display = "none");
+  canvas.addEventListener("click", e => {
+    if (!tree) return;
+    const r = canvas.getBoundingClientRect(), i = tree.find(e.clientX - r.left, e.clientY - r.top, 8);
+    if (i !== undefined) select(i);
+  });
+
+  // search
+  const q = document.getElementById("q"), box = document.getElementById("matches");
+  const lower = A.names.map(s => s.toLowerCase());
+  q.addEventListener("input", () => {
+    const s = q.value.trim().toLowerCase();
+    if (s.length < 2) { box.style.display = "none"; return; }
+    const hits = [];
+    for (let i = 0; i < N && hits.length < 40; i++) if (lower[i].startsWith(s)) hits.push(i);
+    for (let i = 0; i < N && hits.length < 40; i++) if (!lower[i].startsWith(s) && lower[i].includes(s)) hits.push(i);
+    box.innerHTML = hits.slice(0, 10).map(i => '<div data-i="' + i + '">' + A.names[i] + " <small>" + A.country[i] + "</small></div>").join("");
+    box.style.display = hits.length ? "block" : "none";
+  });
+  box.addEventListener("click", e => { const d = e.target.closest("div[data-i]"); if (d) { select(+d.dataset.i); box.style.display = "none"; } });
+  q.addEventListener("keydown", e => { if (e.key === "Enter") { const d = box.querySelector("div[data-i]"); if (d) { select(+d.dataset.i); box.style.display = "none"; } } });
+
+  function select(i) { selected = i; q.value = A.names[i]; draw(); card(i); }
+
+  function card(i) {
+    const el = document.getElementById("card"); el.style.display = "block";
+    document.getElementById("c-name").textContent = A.names[i];
+    const c = A.count ? A.count[i] : -1;
+    document.getElementById("c-meta").textContent = A.country[i] + " · " + A.region[i] +
+      (c >= 0 ? " · " + c.toLocaleString() + " mentions in the Pile" : "") + " · path shows the predicted position at every checkpoint";
+    const sp = document.getElementById("spark"), w = sp.clientWidth, h = 70, g = sp.getContext("2d");
+    sp.width = w * dpr; sp.height = h * dpr; g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    g.clearRect(0, 0, w, h);
+    const x = s => 40 + (w - 50) * s / (T - 1), y = k => h - 14 - (h - 24) * k;
+    g.strokeStyle = "#252c37"; g.beginPath(); g.moveTo(40, y(0)); g.lineTo(w - 10, y(0)); g.stroke();
+    g.fillStyle = "#8a8f98"; g.font = "11px DejaVu Sans, system-ui"; g.fillText("closeness", 0, 12);
+    g.fillText("init", 40, h - 1); g.fillText("end", w - 30, h - 1);
+    g.strokeStyle = "#f6b73c"; g.lineWidth = 2; g.beginPath();
+    for (let s = 0; s < T; s++) { const k = KNOW[s * N + i] / 255; s ? g.lineTo(x(s), y(k)) : g.moveTo(x(s), y(k)); }
+    g.stroke();
+    g.beginPath(); g.arc(x(t), y(KNOW[Math.round(t) * N + i] / 255), 4, 0, 7); g.fillStyle = "#fff"; g.fill();
+  }
+
+  legend();
+  window.addEventListener("resize", resize);
+  fetch("https://cdn.jsdelivr.net/npm/world-atlas@2.0.2/land-50m.json").then(r => r.json())
+    .then(w => { land = topojson.feature(w, w.objects.land); draw(); }).catch(() => {});
+  slider.value = t;
+  resize();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,6 @@
+data/
+logs/
+results/preds/*.parquet
+__pycache__/
+*.pyc
+.pytest_cache/
